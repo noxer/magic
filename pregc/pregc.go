@@ -34,7 +34,7 @@ func execute() {
 
 }
 
-// Add adds a function to the list of functions that is being executed before each GC. Do not call this concurrently!
+// Add adds a function to the list of functions that is being executed before each GC.
 // Do not call this concurrently with other functions of this package!
 func Add(f func()) {
 	fs = append(fs, f)
