@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/noxer/magic/spec/schema/beacon.schema.json",
+  "title": "Magic local beacon",
+  "type": "object",
+  "required": ["magic", "id", "name", "url"],
+  "properties": {
+    "magic": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "id": { "type": "string", "pattern": "^[a-z2-7]{26}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "url": { "type": "string", "pattern": "^https?://" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[A-Za-z0-9_-]{43}$" },
+    "token_file": { "type": "string" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "capabilities": { "type": "array", "items": { "type": "string" } }
+  }
+}
