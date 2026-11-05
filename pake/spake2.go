@@ -1,7 +1,8 @@
 // Package pake implements the password-authenticated key exchange used by
-// Magic pairing: SPAKE2 over NIST P-256 with the M and N constants of
-// RFC 9382, with the transcript and key schedule defined by the Magic
-// pairing specification (spec/05-authentication.md).
+// Magic pairing: SPAKE2 as specified in RFC 9382 with the
+// SPAKE2-P256-SHA256-HKDF-HMAC ciphersuite. The Magic-specific parts are the
+// choice of identities, associated data and password scalar
+// (spec/05-authentication.md).
 //
 // The construction lets two parties that share a short, low-entropy pairing
 // code agree on keys and confirm each other's knowledge of the code. A
@@ -22,6 +23,8 @@ import (
 	"math/big"
 
 	"filippo.io/nistec"
+
+	"github.com/noxer/magic/identity"
 )
 
 // Suite is the name of the ciphersuite implemented by this package.
@@ -31,7 +34,7 @@ const (
 	label        = "magic-pair-v1"
 	pointLen     = 65 // uncompressed SEC 1 encoding
 	scalarLen    = 32
-	confirmLen   = sha256.Size
+	confirmLen   = sha256.Size // HMAC-SHA256 output
 	confirmLabel = "ConfirmationKeys"
 )
 
@@ -74,6 +77,17 @@ type Params struct {
 	Binding []byte
 }
 
+// identities and associated data (RFC 9382 sections 3.3 and 4):
+//
+//	A   = pairing ID
+//	B   = provider ID (derived from Binding)
+//	AAD = "magic-pair-v1" || Binding
+func (p Params) identities() (a, b, aad []byte) {
+	var fp identity.Fingerprint
+	copy(fp[:], p.Binding)
+	return []byte(p.PairingID), []byte(fp.ID()), append([]byte(label), p.Binding...)
+}
+
 // PasswordScalar derives w from the session parameters:
 // w = SHA-512(lp("magic-pair-v1 w") || lp(pairing_id) || lp(code)) mod n.
 func PasswordScalar(pairingID, code string) []byte {
@@ -95,25 +109,25 @@ type State struct {
 	msg    []byte // our public share
 	kcA    []byte
 	kcB    []byte
+	ke     []byte
 	tt     []byte
-	done   bool
 }
 
 // Start begins an exchange and returns the state and the message to send to
 // the peer (pA for the client, pB for the provider).
 func Start(role Role, p Params) (*State, []byte, error) {
-	return start(role, p, rand.Reader)
-}
-
-func start(role Role, p Params, rnd io.Reader) (*State, []byte, error) {
-	if p.PairingID == "" || p.Code == "" || len(p.Binding) == 0 {
+	if p.PairingID == "" || p.Code == "" || len(p.Binding) != sha256.Size {
 		return nil, nil, errors.New("pake: incomplete parameters")
 	}
-	x, err := randomScalar(rnd)
+	x, err := randomScalar(rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &State{role: role, params: p, w: PasswordScalar(p.PairingID, p.Code), x: x}
+	return newState(role, p, PasswordScalar(p.PairingID, p.Code), x)
+}
+
+func newState(role Role, p Params, w, x []byte) (*State, []byte, error) {
+	s := &State{role: role, params: p, w: w, x: x}
 	X, err := nistec.NewP256Point().ScalarBaseMult(x)
 	if err != nil {
 		return nil, nil, err
@@ -133,6 +147,11 @@ func start(role Role, p Params, rnd io.Reader) (*State, []byte, error) {
 // Finish processes the peer's share and returns this party's confirmation
 // MAC (cA for the client, cB for the provider).
 func (s *State) Finish(peer []byte) ([]byte, error) {
+	a, b, aad := s.params.identities()
+	return s.finish(peer, a, b, aad)
+}
+
+func (s *State) finish(peer, idA, idB, aad []byte) ([]byte, error) {
 	if s.tt != nil {
 		return nil, errors.New("pake: Finish called twice")
 	}
@@ -143,7 +162,7 @@ func (s *State) Finish(peer []byte) ([]byte, error) {
 	if err != nil {
 		return nil, ErrBadMessage
 	}
-	// Remove the peer's blinding: P - w*(peer constant).
+	// K = h*x*(peer - w*(peer's constant)); h = 1 for P-256.
 	blind := pointN()
 	if s.role == Provider {
 		blind = pointM()
@@ -154,8 +173,7 @@ func (s *State) Finish(peer []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	Y := nistec.NewP256Point().Add(P, unblind)
-	K, err := nistec.NewP256Point().ScalarMult(Y, s.x)
+	K, err := nistec.NewP256Point().ScalarMult(nistec.NewP256Point().Add(P, unblind), s.x)
 	if err != nil {
 		return nil, err
 	}
@@ -163,28 +181,24 @@ func (s *State) Finish(peer []byte) ([]byte, error) {
 	if len(kb) == 1 { // point at infinity
 		return nil, ErrBadMessage
 	}
-
 	pA, pB := s.msg, peer
 	if s.role == Provider {
 		pA, pB = peer, s.msg
 	}
+	// RFC 9382 section 3.3.
 	var tt []byte
-	tt = appendLP(tt, []byte(label))
-	tt = appendLP(tt, []byte(s.params.PairingID))
-	tt = appendLP(tt, s.params.Binding)
-	tt = appendLP(tt, pA)
-	tt = appendLP(tt, pB)
-	tt = appendLP(tt, kb)
-	tt = appendLP(tt, s.w)
+	for _, f := range [][]byte{idA, idB, pA, pB, kb, s.w} {
+		tt = appendLP(tt, f)
+	}
 	s.tt = tt
-
+	// RFC 9382 section 4: Ke || Ka = Hash(TT); KcA || KcB = KDF(Ka, nil, "ConfirmationKeys" || AAD).
 	sum := sha256.Sum256(tt)
-	ka := sum[16:] // Ke = sum[:16] is reserved for future use
-	keys, err := hkdf.Key(sha256.New, ka, nil, confirmLabel, 2*sha256.Size)
+	s.ke, s.tt = sum[:16], tt
+	keys, err := hkdf.Key(sha256.New, sum[16:], nil, confirmLabel+string(aad), 32)
 	if err != nil {
 		return nil, err
 	}
-	s.kcA, s.kcB = keys[:sha256.Size], keys[sha256.Size:]
+	s.kcA, s.kcB = keys[:16], keys[16:]
 	if s.role == Client {
 		return mac(s.kcA, tt), nil
 	}
@@ -203,9 +217,12 @@ func (s *State) Verify(peerConfirm []byte) error {
 	if len(peerConfirm) != confirmLen || !hmac.Equal(mac(key, s.tt), peerConfirm) {
 		return ErrConfirmation
 	}
-	s.done = true
 	return nil
 }
+
+// SharedSecret returns Ke after a successful Verify. Magic does not use it
+// yet; it is exposed for extensions.
+func (s *State) SharedSecret() []byte { return append([]byte(nil), s.ke...) }
 
 func mac(key, msg []byte) []byte {
 	m := hmac.New(sha256.New, key)

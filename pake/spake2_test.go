@@ -66,19 +66,37 @@ func TestRejectsBadPoints(t *testing.T) {
 	}
 }
 
-// detRand is a deterministic byte stream for test vectors.
-type detRand struct {
-	seed []byte
-	ctr  byte
-}
-
-func (d *detRand) Read(p []byte) (int, error) {
-	for i := 0; i < len(p); {
-		h := sha256.Sum256(append(append([]byte{}, d.seed...), d.ctr))
-		d.ctr++
-		i += copy(p[i:], h[:])
+// TestRFC9382 checks the core against the official test vectors (Appendix B).
+func TestRFC9382(t *testing.T) {
+	data, err := os.ReadFile("../spec/test-vectors/rfc9382-spake2-p256.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return len(p), nil
+	var vs []map[string]string
+	if err := json.Unmarshal(data, &vs); err != nil {
+		t.Fatal(err)
+	}
+	h := func(s string) []byte { b, _ := hex.DecodeString(s); return b }
+	for _, v := range vs {
+		a, _, err := newState(Client, Params{}, h(v["w"]), h(v["x"]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _, _ := newState(Provider, Params{}, h(v["w"]), h(v["y"]))
+		if hex.EncodeToString(a.msg) != v["pA"] || hex.EncodeToString(b.msg) != v["pB"] {
+			t.Fatalf("A=%q B=%q: shares differ", v["A"], v["B"])
+		}
+		cA, err := a.finish(b.msg, []byte(v["A"]), []byte(v["B"]), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cB, _ := b.finish(a.msg, []byte(v["A"]), []byte(v["B"]), nil)
+		for name, got := range map[string][]byte{"TT": a.tt, "Ke": a.ke, "KcA": a.kcA, "KcB": a.kcB, "A_conf": cA, "B_conf": cB} {
+			if hex.EncodeToString(got) != v[name] {
+				t.Errorf("A=%q B=%q: %s = %x, want %s", v["A"], v["B"], name, got, v[name])
+			}
+		}
+	}
 }
 
 type vector struct {
@@ -86,6 +104,9 @@ type vector struct {
 	PairingID string `json:"pairing_id"`
 	Code      string `json:"code"`
 	Binding   string `json:"binding"`
+	IDA       string `json:"A"`
+	IDB       string `json:"B"`
+	AAD       string `json:"AAD"`
 	W         string `json:"w"`
 	X         string `json:"x"`
 	Y         string `json:"y"`
@@ -96,27 +117,25 @@ type vector struct {
 	CB        string `json:"cB"`
 }
 
+// TestVectors checks (and with -update regenerates) the Magic pairing vectors.
 func TestVectors(t *testing.T) {
 	binding := sha256.Sum256([]byte("example provider SPKI"))
 	p := Params{PairingID: "pr_7f3k2m9q", Code: "48213907", Binding: binding[:]}
-	cs, pA, err := start(Client, p, &detRand{seed: []byte("client")})
+	w := PasswordScalar(p.PairingID, p.Code)
+	x, y := sha256.Sum256([]byte("client")), sha256.Sum256([]byte("provider")) // < n
+	cs, pA, err := newState(Client, p, w, x[:])
 	if err != nil {
 		t.Fatal(err)
 	}
-	ps, pB, err := start(Provider, p, &detRand{seed: []byte("provider")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ps, pB, _ := newState(Provider, p, w, y[:])
 	cB, _ := ps.Finish(pA)
 	cA, _ := cs.Finish(pB)
-	if cs.Verify(cB) != nil || ps.Verify(cA) != nil {
-		t.Fatal("confirmation failed")
+	if cs.Verify(cB) != nil || ps.Verify(cA) != nil || !bytes.Equal(cs.tt, ps.tt) {
+		t.Fatal("exchange failed")
 	}
-	if !bytes.Equal(cs.tt, ps.tt) {
-		t.Fatal("transcripts differ")
-	}
-	v := vector{Suite, p.PairingID, p.Code, hex.EncodeToString(p.Binding), hex.EncodeToString(cs.w),
-		hex.EncodeToString(cs.x), hex.EncodeToString(ps.x), hex.EncodeToString(pA), hex.EncodeToString(pB),
+	idA, idB, aad := p.identities()
+	v := vector{Suite, p.PairingID, p.Code, hex.EncodeToString(p.Binding), string(idA), string(idB), hex.EncodeToString(aad),
+		hex.EncodeToString(w), hex.EncodeToString(x[:]), hex.EncodeToString(y[:]), hex.EncodeToString(pA), hex.EncodeToString(pB),
 		hex.EncodeToString(cs.tt), hex.EncodeToString(cA), hex.EncodeToString(cB)}
 	got, _ := json.MarshalIndent([]vector{v}, "", "  ")
 	got = append(got, '\n')

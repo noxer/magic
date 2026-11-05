@@ -105,9 +105,10 @@ the major version (`/magic/v1/...`).
 
 ## 1.7 Open issues
 
-* **Naming and registration.** "Magic" and `_magic._tcp` are working names; the
-  service name is not yet registered with IANA, nor is the `magic` well-known
-  URI suffix or the `magic` URI scheme.
+* **Naming and registration.** "Magic" and `_magic._tcp` are working names.
+  The service name `magic` was unassigned in the IANA Service Name and
+  Transport Protocol Port Number Registry as of 2026-11-05 but is not yet
+  registered, nor are the `magic` well-known URI suffix and URI scheme.
 * **Key rotation.** A provider ID is bound to one key; a signed rotation
   statement that lets clients follow a new key without re-pairing is planned.
 * **Client-shown codes.** Devices without input (speakers, sensors) could show

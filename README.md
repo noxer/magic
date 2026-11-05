@@ -153,7 +153,7 @@ vecs, _ := c.Embed(ctx, "nomic-embed-text", []string{"hello"})
 |---|---|
 | [`magic`](magic.go) | Wire types: descriptor, capabilities, features, beacons, pairing messages |
 | [`identity`](identity) | Provider keys, IDs, fingerprints, certificate pinning |
-| [`pake`](pake) | SPAKE2-P256-SHA256 as used by pairing |
+| [`pake`](pake) | SPAKE2 (RFC 9382, P-256), verified against the RFC test vectors |
 | [`discovery`](discovery) | Combined discovery; [`mdns`](discovery/mdns) responder/browser; [`local`](discovery/local) beacons |
 | [`provider`](provider) | Provider server: descriptor, pairing, tokens, scopes, admin API, gateway |
 | [`client`](client) | Pairing, credential store, pinned connections, chat/embeddings helpers |
@@ -162,7 +162,7 @@ vecs, _ := c.Embed(ctx, "nomic-embed-text", []string{"hello"})
 
 ```
 go test ./...
-python3 spec/test-vectors/verify_spake2.py   # independent check of the pairing crypto
+python3 spec/test-vectors/verify_spake2.py   # RFC 9382 + Magic vectors, standard library only
 ```
 
 The tests include an end-to-end pairing through a TLS-intercepting

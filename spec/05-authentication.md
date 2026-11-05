@@ -110,41 +110,57 @@ operator.
 
 ### 5.2.2 Cryptography: `SPAKE2-P256-SHA256`
 
-SPAKE2 (RFC 9382) over NIST P-256 with SHA-256, HKDF-SHA256 and HMAC-SHA256.
-The client is party A, the provider party B. The group constants are those of
-RFC 9382 § 6 for P-256:
+The exchange is SPAKE2 exactly as specified in RFC 9382, ciphersuite
+`SPAKE2-P256-SHA256-HKDF-HMAC` (P-256, SHA-256, HKDF-SHA256, HMAC-SHA256),
+with the RFC's M and N constants (§ 6):
 
 ```
 M = 02886e2f97ace46e55ba9dd7242579f2993b64e16ef3dcab95afd497333d8fa12f
 N = 03d8bbd6c639c62937b04d997f38c3770719c629d7014d49a24b4f98baa1292b49
 ```
 
-The password scalar, transcript and key schedule are specific to Magic and
-defined here in full. `n` is the group order, `G` the generator, `id` the
-pairing ID as UTF-8, `code` the code as ASCII digits with separators removed,
-and `F` the 32-byte fingerprint.
+The client is party A, the provider party B. Magic fixes the inputs that
+RFC 9382 leaves to the application:
+
+| RFC 9382 input | Magic value |
+|---|---|
+| Identity `A` | the pairing ID, as UTF-8 |
+| Identity `B` | the provider ID derived from `F` (part 4.1), as ASCII |
+| `AAD` | `"magic-pair-v1" ‖ F` |
+| `w` | `OS2IP(SHA-512(lp("magic-pair-v1 w") ‖ lp(pairing_id) ‖ lp(code))) mod n` |
+
+`F` is the 32-byte fingerprint of the provider's TLS key, as seen by the
+client and as owned by the provider; `code` is the code as ASCII digits with
+separators removed. Both parties therefore bind the TLS key twice: through
+`B` in the transcript, and through `AAD` in the confirmation keys.
+
+For reference, the resulting computation (RFC 9382 §§ 3.3, 4):
 
 ```
-w   = OS2IP( SHA-512( lp("magic-pair-v1 w") || lp(id) || lp(code) ) ) mod n
-
-A:  x  <-$ [1, n-1];   pA = x·G + w·M
-B:  y  <-$ [1, n-1];   pB = y·G + w·N
-A:  K  = x·(pB − w·N)
-B:  K  = y·(pA − w·M)
-
-TT  = lp("magic-pair-v1") || lp(id) || lp(F) || lp(pA) || lp(pB) || lp(K) || lp(w)
-Ka  = SHA-256(TT)[16:32]          (SHA-256(TT)[0:16] is reserved)
-KcA || KcB = HKDF-SHA256(IKM = Ka, salt = empty, info = "ConfirmationKeys", L = 64)
-cA  = HMAC-SHA256(KcA, TT)
-cB  = HMAC-SHA256(KcB, TT)
+A:  x <-$ [1, n-1];  pA = x·G + w·M          B:  y <-$ [1, n-1];  pB = y·G + w·N
+A:  K = x·(pB − w·N)                         B:  K = y·(pA − w·M)
+TT  = lp(A) ‖ lp(B) ‖ lp(pA) ‖ lp(pB) ‖ lp(K) ‖ lp(w)
+Ke ‖ Ka   = SHA-256(TT)                       (16 bytes each)
+KcA ‖ KcB = HKDF-SHA256(salt = empty, IKM = Ka, info = "ConfirmationKeys" ‖ AAD, L = 32)
+cA = HMAC-SHA256(KcA, TT)                    cB = HMAC-SHA256(KcB, TT)
 ```
 
 Points are encoded uncompressed (65 bytes, SEC 1 § 2.3.3); `w` as 32 bytes
 big-endian. Receivers MUST reject shares that aren't valid points on the
 curve or that are the point at infinity, and MUST abort if `K` is the
-point at infinity. MACs MUST be compared in constant time.
+point at infinity. MACs MUST be compared in constant time. `Ke` is not used
+by this version.
 
-Test vectors: [`test-vectors/pairing-spake2.json`](test-vectors/pairing-spake2.json).
+RFC 9382 recommends deriving `w` with a memory-hard function. That protects
+stored password verifiers. Pairing codes are ephemeral and never stored, and
+SPAKE2 already prevents offline guessing, so a plain hash is used.
+
+Test vectors: the official RFC 9382 vectors in
+[`test-vectors/rfc9382-spake2-p256.json`](test-vectors/rfc9382-spake2-p256.json),
+and end-to-end Magic vectors in
+[`test-vectors/pairing-spake2.json`](test-vectors/pairing-spake2.json). Both
+are checked by the Go tests and by the stand-alone
+[`verify_spake2.py`](test-vectors/verify_spake2.py).
 
 ### 5.2.3 Why this is safe
 

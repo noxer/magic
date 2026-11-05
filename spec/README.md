@@ -24,8 +24,11 @@ Machine-readable material:
 
 * [`schema/descriptor.schema.json`](schema/descriptor.schema.json) and
   [`schema/beacon.schema.json`](schema/beacon.schema.json) (JSON Schema 2020-12)
-* [`test-vectors/pairing-spake2.json`](test-vectors/pairing-spake2.json) with an
-  independent checker, [`test-vectors/verify_spake2.py`](test-vectors/verify_spake2.py)
+* Test vectors: the official RFC 9382 vectors
+  ([`rfc9382-spake2-p256.json`](test-vectors/rfc9382-spake2-p256.json)) and
+  Magic pairing vectors ([`pairing-spake2.json`](test-vectors/pairing-spake2.json)),
+  with an independent standard-library checker,
+  [`verify_spake2.py`](test-vectors/verify_spake2.py)
 
 ## Status
 

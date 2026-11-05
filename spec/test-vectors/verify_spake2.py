@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Independent check of pairing-spake2.json using only the Python standard
-library (textbook P-256 arithmetic; not constant time, for testing only).
+"""Independent check of the pairing test vectors using only the Python
+standard library (textbook P-256 arithmetic; not constant time, for testing
+only). Checks the official RFC 9382 vectors (rfc9382-spake2-p256.json) and
+the Magic pairing vectors (pairing-spake2.json).
 
-    python3 verify_spake2.py [pairing-spake2.json]
+    python3 verify_spake2.py
 """
 import hashlib, hmac, json, struct, sys, os
 
@@ -35,10 +37,6 @@ def decompress(h):
     y = pow((x ** 3 - 3 * x + B) % P, (P + 1) // 4, P)
     return (x, y if y % 2 == b[0] - 2 else P - y)
 
-def uncompressed(h):
-    b = bytes.fromhex(h); assert b[0] == 4 and len(b) == 65
-    return (int.from_bytes(b[1:33], "big"), int.from_bytes(b[33:], "big"))
-
 enc = lambda pt: b"\x04" + pt[0].to_bytes(32, "big") + pt[1].to_bytes(32, "big")
 lp = lambda x: struct.pack("<Q", len(x)) + x
 
@@ -49,26 +47,46 @@ def hkdf(ikm, info, length):
         t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest(); out += t; i += 1
     return out[:length]
 
-def check(v):
+def b32id(fp):
+    import base64
+    return base64.b32encode(fp[:16]).decode().rstrip("=").lower()
+
+def spake2(w, x, y, A, B, aad):
+    """RFC 9382 SPAKE2-P256-SHA256-HKDF-HMAC; returns all intermediate values."""
     M, Nn = decompress(M_HEX), decompress(N_HEX)
+    pA, pB = add(mul(x, G), mul(w, M)), add(mul(y, G), mul(w, Nn))
+    kA = mul(x, add(pB, mul(N_ORDER - w, Nn)))
+    kB = mul(y, add(pA, mul(N_ORDER - w, M)))
+    assert kA == kB, "K"
+    tt = b"".join(lp(f) for f in [A, B, enc(pA), enc(pB), enc(kA), w.to_bytes(32, "big")])
+    h = hashlib.sha256(tt).digest()
+    kc = hkdf(h[16:], b"ConfirmationKeys" + aad, 32)
+    return dict(pA=enc(pA).hex(), pB=enc(pB).hex(), K=enc(kA).hex(), TT=tt.hex(), Ke=h[:16].hex(), Ka=h[16:].hex(),
+                KcA=kc[:16].hex(), KcB=kc[16:].hex(),
+                A_conf=hmac.new(kc[:16], tt, hashlib.sha256).hexdigest(),
+                B_conf=hmac.new(kc[16:], tt, hashlib.sha256).hexdigest())
+
+def check_rfc(v):
+    got = spake2(int(v["w"], 16), int(v["x"], 16), int(v["y"], 16), v["A"].encode(), v["B"].encode(), b"")
+    for k, val in got.items():
+        assert val == v[k], f"RFC vector A={v['A']!r} B={v['B']!r}: {k}"
+
+def check_magic(v):
     pid, code, fp = v["pairing_id"].encode(), v["code"].encode(), bytes.fromhex(v["binding"])
     w = int.from_bytes(hashlib.sha512(lp(b"magic-pair-v1 w") + lp(pid) + lp(code)).digest(), "big") % N_ORDER
     assert w == int(v["w"], 16), "w"
-    x, y = int(v["x"], 16), int(v["y"], 16)
-    pA, pB = enc(add(mul(x, G), mul(w, M))), enc(add(mul(y, G), mul(w, Nn)))
-    assert pA.hex() == v["pA"] and pB.hex() == v["pB"], "shares"
-    kA = mul(x, add(uncompressed(v["pB"]), mul(N_ORDER - w, Nn)))
-    kB = mul(y, add(uncompressed(v["pA"]), mul(N_ORDER - w, M)))
-    assert kA == kB, "K"
-    tt = lp(b"magic-pair-v1") + lp(pid) + lp(fp) + lp(pA) + lp(pB) + lp(enc(kA)) + lp(w.to_bytes(32, "big"))
-    assert tt.hex() == v["TT"], "TT"
-    keys = hkdf(hashlib.sha256(tt).digest()[16:], b"ConfirmationKeys", 64)
-    assert hmac.new(keys[:32], tt, hashlib.sha256).hexdigest() == v["cA"], "cA"
-    assert hmac.new(keys[32:], tt, hashlib.sha256).hexdigest() == v["cB"], "cB"
+    A, B, aad = pid, b32id(fp).encode(), b"magic-pair-v1" + fp
+    assert (A.decode(), B.decode(), aad.hex()) == (v["A"], v["B"], v["AAD"]), "identities"
+    got = spake2(w, int(v["x"], 16), int(v["y"], 16), A, B, aad)
+    for k, ours in [("pA", "pA"), ("pB", "pB"), ("TT", "TT"), ("A_conf", "cA"), ("B_conf", "cB")]:
+        assert got[k] == v[ours], f"Magic vector: {ours}"
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "pairing-spake2.json")
-    vectors = json.load(open(path))
-    for v in vectors:
-        check(v)
-    print(f"{len(vectors)} vector(s) OK")
+    here = os.path.dirname(os.path.abspath(__file__))
+    rfc = json.load(open(os.path.join(here, "rfc9382-spake2-p256.json")))
+    for v in rfc:
+        check_rfc(v)
+    magic = json.load(open(os.path.join(here, "pairing-spake2.json")))
+    for v in magic:
+        check_magic(v)
+    print(f"{len(rfc)} RFC 9382 vector(s) and {len(magic)} Magic vector(s) OK")
