@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/noxer/magic/spec/schema/descriptor.schema.json",
+  "title": "Magic provider descriptor",
+  "type": "object",
+  "required": ["magic", "provider", "auth", "api", "capabilities"],
+  "properties": {
+    "magic": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "provider": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/providerId" },
+        "name": { "type": "string", "minLength": 1 },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" },
+        "software": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "url": { "type": "string", "format": "uri" }
+          }
+        },
+        "locality": { "$ref": "#/$defs/locality" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["methods"],
+      "properties": {
+        "methods": { "type": "array", "items": { "type": "string" } },
+        "pairing": {
+          "type": "object",
+          "required": ["endpoint", "suites", "code_digits"],
+          "properties": {
+            "endpoint": { "type": "string", "pattern": "^/" },
+            "suites": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            "code_digits": { "type": "integer", "minimum": 6, "maximum": 12 }
+          }
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "required": ["openai"],
+      "properties": { "openai": { "type": "string", "pattern": "^/" } }
+    },
+    "capabilities": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/capability" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": { "models": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "models": { "type": "array", "items": { "$ref": "#/$defs/model" } }
+  },
+  "$defs": {
+    "providerId": { "type": "string", "pattern": "^[a-z2-7]{26}$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[A-Za-z0-9_-]{43}$" },
+    "locality": { "enum": ["device", "network", "cloud"] },
+    "capability": {
+      "type": "string",
+      "anyOf": [
+        { "enum": ["chat", "completions", "embeddings", "rerank", "transcription", "speech", "images", "moderation"] },
+        { "pattern": "^x-[a-z0-9-]{3,38}$" }
+      ]
+    },
+    "model": {
+      "type": "object",
+      "required": ["id", "capabilities"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "context_length": { "type": "integer", "minimum": 1 },
+        "dimensions": { "type": "integer", "minimum": 1 },
+        "locality": { "$ref": "#/$defs/locality" },
+        "family": { "type": "string" },
+        "parameters": { "type": "string" }
+      }
+    }
+  }
+}
